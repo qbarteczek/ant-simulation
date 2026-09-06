@@ -45,6 +45,29 @@ SEASONS = {
     "Zima": dict(food_regen=0.22, activity=0.4, spawn=0.15, predator=0.5, tint=(200, 225, 255, 55)),
 }
 
+# --- Pogoda: temperatura, opady, wiatr (klimat umiarkowany) -----------------
+# średnia dobowa temperatura wg pory roku (°C) - punkt startowy, dalej
+# modulowany porą dnia, biomem i losową zmiennością pogodową
+SEASON_TEMP_BASE = {"Wiosna": 11.0, "Lato": 23.0, "Jesień": 9.0, "Zima": -1.0}
+BIOME_TEMP_OFFSET = {"Łąka": 0.0, "Las": -2.5, "Pustynia": 6.0}
+TEMP_DAY_AMPLITUDE = 5.0  # °C - o tyle cieplej w południe niż o północy
+TEMP_NOISE_SIGMA = 0.4  # losowy dryf "pogodowy" temperatury (na krok czasowy)
+TEMP_NOISE_REVERT = 0.02  # jak szybko dryf wraca do zera (unika trwałych ekstremów)
+
+# szansa na rozpoczęcie opadu (na "sprawdzenie" - patrz WEATHER_CHECK_INTERVAL)
+WEATHER_RAIN_CHANCE = {"Wiosna": 0.4, "Lato": 0.2, "Jesień": 0.5, "Zima": 0.0}
+WEATHER_SNOW_CHANCE = {"Wiosna": 0.0, "Lato": 0.0, "Jesień": 0.05, "Zima": 0.55}
+WEATHER_CHECK_INTERVAL = (60.0, 150.0)  # s - jak często losujemy zmianę pogody
+WEATHER_DURATION = (40.0, 180.0)  # s - jak długo trwa epizod opadu
+
+WIND_DRIFT_SIGMA = 0.05
+WIND_REVERT = 0.15
+WIND_MIN = 0.05
+WIND_MAX = 1.0
+
+RAIN_PARTICLE_COUNT = 140
+SNOW_PARTICLE_COUNT = 110
+
 # --- Rodzaje mrówek --------------------------------------------------------
 SPECIES = {
     "Rudnica leśna": dict(
@@ -119,6 +142,9 @@ PLANT_STOCK_RATE = 3.0  # / s, dojrzała roślina w pełnym świetle dnia
 PLANT_REPRO_MIN_STOCK = 45.0
 PLANT_REPRO_CHANCE = 0.05  # / s, gdy dojrzała i ma zapas ponad prog
 PLANT_SEED_SPREAD = (30, 90)  # promień rozsiewania nasion od rośliny-matki
+PLANT_LIFESPAN_RANGE = (500.0, 1400.0)  # s - roślina starzeje się i usycha
+PLANT_FROST_TEMP = -8.0  # °C - poniżej tego roślina może przemarznąć
+PLANT_FROST_DEATH_CHANCE = 0.005  # / s ekspozycji na mróz poniżej progu (rzadkie przemarznięcia, nie masowa zagłada)
 
 # --- Cykl dnia i nocy --------------------------------------------------------
 DAY_NIGHT_MIN_ACTIVITY = 0.7  # mnożnik aktywności mrówek w pełni nocy

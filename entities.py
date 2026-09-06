@@ -42,6 +42,8 @@ class Plant:
         self.pos = Vector2(pos)
         self.growth = 1.0 if mature else 0.0
         self.stock = C.PLANT_STOCK_MAX * 0.5 if mature else 0.0
+        self.age = 0.0
+        self.lifespan = random.uniform(*C.PLANT_LIFESPAN_RANGE)
         self.alive = True
 
     @property
@@ -58,6 +60,17 @@ class Plant:
         return got
 
     def update(self, dt, world):
+        self.age += dt
+        if self.age >= self.lifespan:
+            self.alive = False  # usycha ze starości
+            return None
+
+        temperature = getattr(world, "temperature", 15.0)
+        if temperature <= C.PLANT_FROST_TEMP:
+            if random.random() < C.PLANT_FROST_DEATH_CHANCE * dt:
+                self.alive = False  # przemarzła
+                return None
+
         daylight_factor = max(0.15, world.daylight)
         if self.growth < 1.0:
             self.growth = min(1.0, self.growth + dt * daylight_factor / C.PLANT_GROWTH_TIME)
@@ -93,7 +106,7 @@ class AphidCluster:
     def update(self, dt, world):
         if self.count <= 0:
             return
-        host_ready = self.host_plant is None or self.host_plant.growth >= 1.0
+        host_ready = self.host_plant is None or (self.host_plant.alive and self.host_plant.growth >= 1.0)
         rate = C.APHID_HONEYDEW_RATE * self.count * world.mods["food_regen"]
         rate *= 1.0 if host_ready else 0.1  # mszyce żywią się rośliną - bez niej ledwo produkują
         self.honeydew = min(C.APHID_HONEYDEW_MAX, self.honeydew + rate * dt)

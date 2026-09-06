@@ -47,8 +47,11 @@ class PheromoneGrid:
         cy = np.clip((ys // C.CELL).astype(np.int32), 0, C.GRID_H - 1)
         return grid[cy, cx]
 
-    def evaporate(self, dt):
-        factor = C.PHEROMONE_EVAPORATION ** (dt * 60.0)
+    def evaporate(self, dt, wind=0.0):
+        # wiatr rozprasza zapach szybciej - realistyczny efekt, utrudnia
+        # utrzymanie szlaków feromonowych w wietrzne dni
+        base = C.PHEROMONE_EVAPORATION / (1.0 + 0.5 * wind)
+        factor = base ** (dt * 60.0)
         self.home *= factor
         self.food *= factor
 

@@ -45,6 +45,14 @@ class Simulation:
 
         self.time = 0.0
         self.daylight = 1.0
+        self.temperature = C.SEASON_TEMP_BASE[cfg["season"]]
+        self._temp_noise = 0.0
+        self.weather = "clear"  # "clear" | "rain" | "snow"
+        self.precip_intensity = 0.0
+        self.weather_timer = random.uniform(*C.WEATHER_CHECK_INTERVAL)
+        self.wind = 0.2
+        self._rain_particles = None
+        self._snow_particles = None
         self.paused = False
         self.speed_idx = 0
         self.speed_mult = C.SPEED_LEVELS[self.speed_idx]
@@ -169,8 +177,28 @@ class Simulation:
         self.time += dt
         phase = (self.time % C.DAY_LENGTH_SECONDS) / C.DAY_LENGTH_SECONDS
         self.daylight = 0.5 + 0.5 * math.cos(2 * math.pi * phase)
-        night_factor = C.DAY_NIGHT_MIN_ACTIVITY + (1 - C.DAY_NIGHT_MIN_ACTIVITY) * self.daylight
-        self.mods["activity"] = self.season["activity"] * night_factor
+
+        self._update_weather(dt)
+
+        temp_factor = self._temperature_activity_factor(self.temperature)
+        precip_factor = 1.0
+        food_weather_factor = 1.0
+        if self.weather == "rain":
+            precip_factor = 1.0 - 0.35 * self.precip_intensity
+            food_weather_factor = 1.0 + 0.25 * self.precip_intensity
+        elif self.weather == "snow":
+            precip_factor = 1.0 - 0.45 * self.precip_intensity
+            food_weather_factor = 1.0 - 0.5 * self.precip_intensity
+        wind_factor = 1.0 - 0.15 * self.wind
+
+        # kilka mnożników z osobna mogłoby zbić aktywność do zera w skrajnej
+        # pogodzie (mróz + śnieżyca + noc naraz) - twardy dolny próg chroni
+        # przed pułapką wymarcia, tak jak przy poprzednich poprawkach balansu
+        weather_activity = max(0.3, temp_factor * precip_factor * wind_factor)
+        self.mods["activity"] = self.season["activity"] * weather_activity
+        self.mods["food_regen"] = (
+            self.biome["food_regen"] * self.season["food_regen"] * max(0.4, food_weather_factor)
+        )
 
         self.ant_swarm.update(dt, self)
         self._resolve_ant_spider_combat(dt)
@@ -197,10 +225,69 @@ class Simulation:
             child = p.update(dt, self)
             if child is not None:
                 newborn_plants.append(child)
-        self.plants.extend(newborn_plants)
+        self.plants = [p for p in self.plants if p.alive] + newborn_plants
 
-        self.pher.evaporate(dt)
+        self.pher.evaporate(dt, wind=self.wind)
         self._handle_spawning()
+
+    def _update_weather(self, dt):
+        season_name = self.cfg["season"]
+        base_temp = C.SEASON_TEMP_BASE[season_name] + C.BIOME_TEMP_OFFSET[self.cfg["biome"]]
+        day_swing = C.TEMP_DAY_AMPLITUDE * (2 * self.daylight - 1)
+
+        # losowy "pogodowy" dryf temperatury - powracający do zera, żeby nie
+        # utrwalać ciągłych ekstremów (Ornstein-Uhlenbeck w uproszczeniu)
+        self._temp_noise += random.gauss(0, C.TEMP_NOISE_SIGMA) - self._temp_noise * C.TEMP_NOISE_REVERT
+        self._temp_noise = max(-6.0, min(6.0, self._temp_noise))
+
+        precip_cooling = 0.0
+        if self.weather == "rain":
+            precip_cooling = -2.0 * self.precip_intensity
+        elif self.weather == "snow":
+            precip_cooling = -3.0 * self.precip_intensity
+        self.temperature = base_temp + day_swing + self._temp_noise + precip_cooling
+
+        # wiatr - wolny losowy spacer w granicach [MIN, MAX]
+        self.wind += random.gauss(0, C.WIND_DRIFT_SIGMA) - (self.wind - 0.25) * C.WIND_REVERT
+        self.wind = max(C.WIND_MIN, min(C.WIND_MAX, self.wind))
+
+        self.weather_timer -= dt
+        if self.weather_timer <= 0:
+            if self.weather == "clear":
+                roll = random.random()
+                snow_p = C.WEATHER_SNOW_CHANCE.get(season_name, 0.0)
+                rain_p = C.WEATHER_RAIN_CHANCE.get(season_name, 0.0)
+                if roll < snow_p:
+                    self.weather = "snow"
+                    self.precip_intensity = random.uniform(0.4, 1.0)
+                    self.weather_timer = random.uniform(*C.WEATHER_DURATION)
+                elif roll < snow_p + rain_p:
+                    self.weather = "rain"
+                    self.precip_intensity = random.uniform(0.4, 1.0)
+                    self.weather_timer = random.uniform(*C.WEATHER_DURATION)
+                else:
+                    self.weather_timer = random.uniform(*C.WEATHER_CHECK_INTERVAL)
+            else:
+                self.weather = "clear"
+                self.precip_intensity = 0.0
+                self.weather_timer = random.uniform(*C.WEATHER_CHECK_INTERVAL)
+
+    @staticmethod
+    def _temperature_activity_factor(temp):
+        """Owady są zmiennocieplne - ich aktywność silnie zależy od temperatury
+        otoczenia. Krzywa w przybliżeniu odpowiada biologii mrówek w klimacie
+        umiarkowanym: optimum ok. 18-28°C, mróz = niemal bezruch."""
+        if temp <= -10:
+            return 0.30
+        if temp <= 0:
+            return 0.30 + (temp + 10) / 10 * 0.30
+        if temp <= 18:
+            return 0.60 + (temp - 0) / 18 * 0.40
+        if temp <= 28:
+            return 1.0
+        if temp <= 36:
+            return 1.0 - (temp - 28) / 8 * 0.25
+        return 0.75
 
     def _resolve_ant_spider_combat(self, dt):
         swarm = self.ant_swarm
@@ -269,7 +356,62 @@ class Simulation:
             overlay.fill((10, 15, 45, night_alpha))
             surface.blit(overlay, (0, 0))
 
+        self._draw_precipitation(surface)
         self._draw_hud(surface)
+
+    def _draw_precipitation(self, surface):
+        if self.weather == "rain":
+            self._draw_rain(surface)
+        elif self.weather == "snow":
+            self._draw_snow(surface)
+
+    def _draw_rain(self, surface):
+        if self._rain_particles is None:
+            self._rain_particles = np.column_stack(
+                [
+                    np.random.uniform(0, C.WIDTH, C.RAIN_PARTICLE_COUNT),
+                    np.random.uniform(0, C.HEIGHT, C.RAIN_PARTICLE_COUNT),
+                ]
+            ).astype(np.float32)
+        pts = self._rain_particles
+        drop_x = (self.wind - 0.25) * 14
+        drop_y = 16 + 8 * self.wind
+        pts[:, 0] += drop_x
+        pts[:, 1] += drop_y
+        wrap = pts[:, 1] > C.HEIGHT
+        if wrap.any():
+            pts[wrap, 1] -= C.HEIGHT
+            pts[wrap, 0] = np.random.uniform(0, C.WIDTH, int(wrap.sum()))
+        pts[:, 0] %= C.WIDTH
+
+        n = max(1, int(C.RAIN_PARTICLE_COUNT * self.precip_intensity))
+        color = (170, 195, 225)
+        for x, y in pts[:n]:
+            pygame.draw.line(surface, color, (x, y), (x - drop_x * 0.4, y - 9), 1)
+
+    def _draw_snow(self, surface):
+        if self._snow_particles is None:
+            self._snow_particles = np.column_stack(
+                [
+                    np.random.uniform(0, C.WIDTH, C.SNOW_PARTICLE_COUNT),
+                    np.random.uniform(0, C.HEIGHT, C.SNOW_PARTICLE_COUNT),
+                    np.random.uniform(0, 2 * math.pi, C.SNOW_PARTICLE_COUNT),
+                ]
+            ).astype(np.float32)
+        pts = self._snow_particles
+        pts[:, 1] += 3.5
+        pts[:, 2] += 0.05
+        pts[:, 0] += np.sin(pts[:, 2]) * 0.8 + (self.wind - 0.25) * 3
+        wrap = pts[:, 1] > C.HEIGHT
+        if wrap.any():
+            pts[wrap, 1] -= C.HEIGHT
+            pts[wrap, 0] = np.random.uniform(0, C.WIDTH, int(wrap.sum()))
+        pts[:, 0] %= C.WIDTH
+
+        n = max(1, int(C.SNOW_PARTICLE_COUNT * self.precip_intensity))
+        color = (250, 250, 255)
+        for x, y, _ in pts[:n]:
+            pygame.draw.circle(surface, color, (int(x), int(y)), 2)
 
     def _draw_obstacle(self, surface, obs):
         shape = self.biome["obstacle_shape"]
@@ -396,6 +538,13 @@ class Simulation:
         pygame.draw.circle(surface, (20, 20, 20), (x, y), 4, width=1)
         pygame.draw.circle(surface, (20, 20, 20), (x - 1, y - 1), 1)
 
+    def _weather_line(self):
+        weather_label = {"clear": "bezchmurnie", "rain": "deszcz", "snow": "śnieg"}[self.weather]
+        extra = f" ({self.precip_intensity*100:.0f}%)" if self.weather != "clear" else ""
+        return (
+            f"Pogoda: {self.temperature:+.1f}°C   {weather_label}{extra}   Wiatr: {self.wind:.2f}"
+        )
+
     def _evolution_line(self, n):
         if n == 0:
             return "Ewolucja: brak żywej populacji"
@@ -419,6 +568,7 @@ class Simulation:
             f"Mszyce: {sum(c.count for c in self.aphids)}   Pająki: {len(self.spiders)}   Biedronki: {len(self.ladybugs)}",
             f"Dzień symulacji: {self.time / C.DAY_LENGTH_SECONDS:.2f} ({day_label})   Prędkość: x{self.speed_mult}"
             + ("   [PAUZA]" if self.paused else ""),
+            self._weather_line(),
             self._evolution_line(n),
             "SPACJA=pauza  +/-=predkosc(x1..x20)  ESC=menu  R=reset  LPM=zasadz roslinę  PPM=przeszkoda",
         ]
