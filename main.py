@@ -1,11 +1,17 @@
-"""Punkt wejścia: menu konfiguracji -> symulacja życia mrówek."""
+"""Punkt wejścia: menu konfiguracji -> symulacja życia mrówek.
+
+Pętla główna jest asynchroniczna (async/await), żeby ten sam kod dało się
+uruchomić natywnie (desktop) i w przeglądarce przez pygbag (WebAssembly) -
+przeglądarka wymaga oddania sterowania (await asyncio.sleep(0)) w każdej
+klatce, inaczej zawiesza kartę.
+"""
+import asyncio
 import sys
 
 import pygame
 
 import config as C
 from menu import Menu
-from simulation import Simulation
 
 
 def _make_window():
@@ -31,7 +37,15 @@ def _rescale_event(event, screen):
     return event
 
 
-def main():
+async def main():
+    if sys.platform == "emscripten":
+        # w przeglądarce (Pyodide/pygbag) numpy trzeba doinstalować async,
+        # zanim jakikolwiek moduł spróbuje go zaimportować
+        import micropip
+        await micropip.install("numpy")
+
+    from simulation import Simulation
+
     pygame.init()
     pygame.display.set_caption("Symulacja życia mrówek")
     screen = _make_window()
@@ -89,10 +103,11 @@ def main():
         else:
             pygame.transform.smoothscale(virtual, screen.get_size(), screen)
         pygame.display.flip()
+        await asyncio.sleep(0)
 
     pygame.quit()
     sys.exit()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
