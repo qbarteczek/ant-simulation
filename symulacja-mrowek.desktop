@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Symulacja życia mrówek
+Comment=Symulacja mrowiska w ograniczonym środowisku
+Exec=/home/qba/ant-simulation/uruchom.sh
+Path=/home/qba/ant-simulation
+Terminal=false
+Categories=Game;Simulation;
