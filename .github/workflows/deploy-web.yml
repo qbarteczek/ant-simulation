@@ -31,7 +31,10 @@ jobs:
         run: pip install pygbag
 
       - name: Build web (WebAssembly) version
-        run: python -m pygbag --build .
+        # ume_block=0: gra nie używa dźwięku, więc pomijamy ekran "kliknij aby
+        # zacząć" wymagany domyślnie przez politykę autoplay audio przeglądarek
+        # (inaczej plansza wygląda na pustą/zawieszoną do czasu kliknięcia)
+        run: python -m pygbag --build --ume_block 0 .
 
       - name: Mark output as non-Jekyll
         run: touch build/web/.nojekyll
