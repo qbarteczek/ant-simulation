@@ -12,6 +12,7 @@ import pygame
 
 import config as C
 from menu import Menu
+from simulation import Simulation
 
 
 def _make_window():
@@ -38,14 +39,6 @@ def _rescale_event(event, screen):
 
 
 async def main():
-    if sys.platform == "emscripten":
-        # w przeglądarce (Pyodide/pygbag) numpy trzeba doinstalować async,
-        # zanim jakikolwiek moduł spróbuje go zaimportować
-        import micropip
-        await micropip.install("numpy")
-
-    from simulation import Simulation
-
     pygame.init()
     pygame.display.set_caption("Symulacja życia mrówek")
     screen = _make_window()
