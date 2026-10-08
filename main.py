@@ -4,7 +4,14 @@ Pętla główna jest asynchroniczna (async/await), żeby ten sam kod dało się
 uruchomić natywnie (desktop) i w przeglądarce przez pygbag (WebAssembly) -
 przeglądarka wymaga oddania sterowania (await asyncio.sleep(0)) w każdej
 klatce, inaczej zawiesza kartę.
+
+Blok niżej to metadane PEP 723 - pygbag (NIE Pyodide, więc bez micropip)
+skanuje go, żeby wiedzieć jakie paczki realnie zainstalować (nie tylko
+pobrać do cache) do sys.path przed uruchomieniem main.py w przeglądarce.
 """
+# /// script
+# dependencies = ["numpy"]
+# ///
 import asyncio
 import sys
 import traceback
@@ -13,26 +20,41 @@ import pygame
 
 import config as C
 from menu import Menu
-from simulation import Simulation
+
+# "Simulation" (i przez nie numpy) importowane leniwie w main() dopiero po
+# narysowaniu ekranu ładowania - import numpy bywa bardzo wolny/zawodny w
+# WebAssembly, a leniwy import pozwala pokazać komunikat i złapać ewentualny
+# wyjątek zamiast wywalać się jeszcze przed uruchomieniem pętli try/except
 
 
-def _make_window():
-    """Tworzy okno dopasowane do rozdzielczości ekranu (na małych ekranach
-    skaluje w dół, żeby cała zawartość - w tym przycisk startu - była widoczna)."""
+def _query_screen_size():
     try:
         info = pygame.display.Info()
         screen_w, screen_h = info.current_w, info.current_h
         if screen_w <= 0 or screen_h <= 0:
             raise ValueError("nieprawidlowy rozmiar ekranu zgloszony przez SDL")
+        return screen_w, screen_h
     except Exception:
         # w przeglądarce (WASM/canvas) pygame.display.Info() bywa niedostępne
         # lub zwraca śmieciowe wartości przed pierwszym set_mode - bezpieczny
         # rozmiar zastępczy zamiast wywalania się tutaj
-        screen_w, screen_h = C.WIDTH, C.HEIGHT
-    avail_w = max(screen_w - 60, 320)
-    avail_h = max(screen_h - 100, 240)
+        return C.WIDTH, C.HEIGHT
+
+
+def _fit_size(screen_w, screen_h):
+    # w przeglądarce nie ma paska tytułu/ramki okna do odjęcia jak na
+    # desktopie - canvas ma zajmować praktycznie całą dostępną przestrzeń
+    margin_w, margin_h = (10, 10) if sys.platform == "emscripten" else (60, 100)
+    avail_w = max(screen_w - margin_w, 320)
+    avail_h = max(screen_h - margin_h, 240)
     scale = min(1.0, avail_w / C.WIDTH, avail_h / C.HEIGHT)
-    win_size = (max(1, int(C.WIDTH * scale)), max(1, int(C.HEIGHT * scale)))
+    return (max(1, int(C.WIDTH * scale)), max(1, int(C.HEIGHT * scale)))
+
+
+def _make_window():
+    """Tworzy okno dopasowane do rozdzielczości ekranu (na małych ekranach
+    skaluje w dół, żeby cała zawartość - w tym przycisk startu - była widoczna)."""
+    win_size = _fit_size(*_query_screen_size())
     screen = pygame.display.set_mode(win_size, pygame.RESIZABLE)
     return screen
 
@@ -72,10 +94,31 @@ async def _show_fatal_error(message):
         await asyncio.sleep(0)
 
 
+async def _load_simulation_module(screen):
+    """Import "simulation" (a przez nie numpy) leniwie, z widocznym na
+    canvasie komunikatem ładowania - import numpy bywa bardzo wolny w
+    WebAssembly (rzędu dziesiątek sekund/kilku minut), więc bez tego
+    strona wygląda na zawieszoną/pustą przez cały ten czas."""
+    font = pygame.font.Font(None, 24)
+    screen.fill((25, 30, 25))
+    msg = "Ładowanie silnika symulacji (numpy)... to może potrwać do kilku minut w przeglądarce."
+    screen.blit(font.render(msg, True, (230, 230, 210)), (16, 16))
+    pygame.display.flip()
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+    # instalacja numpy (jeśli potrzebna) załatwiona przez pygbag na podstawie
+    # bloku PEP 723 na górze tego pliku - tu tylko zwykły import
+    from simulation import Simulation
+
+    return Simulation
+
+
 async def _run():
     pygame.init()
     pygame.display.set_caption("Symulacja życia mrówek")
     screen = _make_window()
+    Simulation = await _load_simulation_module(screen)
     virtual = pygame.Surface((C.WIDTH, C.HEIGHT))
     clock = pygame.time.Clock()
 
@@ -84,9 +127,24 @@ async def _run():
     sim = None
     last_cfg = None
     running = True
+    is_web = sys.platform == "emscripten"
+    last_screen_size = _query_screen_size()
+    resize_check_timer = 0.0
 
     while running:
         dt = min(clock.tick(C.FPS) / 1000.0, 0.05)
+
+        # w przeglądarce zmiana rozmiaru okna nie zawsze dociera jako
+        # pygame.VIDEORESIZE (pygbag tego nie gwarantuje) - dopytujemy więc
+        # okresowo o realny rozmiar i sami dopasowujemy okno, gdy się zmieni
+        if is_web:
+            resize_check_timer -= dt
+            if resize_check_timer <= 0:
+                resize_check_timer = 0.5
+                current_size = _query_screen_size()
+                if current_size != last_screen_size:
+                    last_screen_size = current_size
+                    screen = pygame.display.set_mode(_fit_size(*current_size), pygame.RESIZABLE)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:

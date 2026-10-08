@@ -387,6 +387,10 @@ class Simulation:
         n = max(1, int(C.RAIN_PARTICLE_COUNT * self.precip_intensity))
         color = (170, 195, 225)
         for x, y in pts[:n]:
+            # rzutowanie z numpy.float32 na zwykly float - niektóre backendy
+            # pygame (m.in. WASM/pygame-ce w przeglądarce) nie akceptują
+            # skalarów numpy jako współrzędnych pygame.draw.line
+            x, y = float(x), float(y)
             pygame.draw.line(surface, color, (x, y), (x - drop_x * 0.4, y - 9), 1)
 
     def _draw_snow(self, surface):
