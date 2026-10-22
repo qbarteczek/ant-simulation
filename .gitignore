@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 build/
 klucz_api.txt
+ksiega_mrowiska.json
+ksiega_mrowiska.json.tmp

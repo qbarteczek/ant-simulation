@@ -17,6 +17,7 @@ coraz dłuższą historię rozmowy. Dzięki temu koszt zapytania jest stały.
 Klucz API: zmienna ANTHROPIC_API_KEY albo plik klucz_api.txt obok tego
 pliku (plik jest w .gitignore - nie trafia do repozytorium).
 """
+import json
 import math
 import os
 import random
@@ -80,9 +81,18 @@ NARZEDZIE = {
                 "type": ["string", "null"],
                 "description": "coś, co chcesz zapamiętać na później (np. gdzie jest jedzenie) albo null",
             },
+            "lekcja": {
+                "type": ["string", "null"],
+                "description": "nowa ogólna lekcja do Księgi mrowiska (bez współrzędnych, jedno zdanie) albo null",
+            },
+            "potwierdz_lekcje": {
+                "type": ["integer", "null"],
+                "description": "numer lekcji z Księgi, która właśnie się sprawdziła, albo null",
+            },
         },
         "required": [
             "mysl", "akcja", "cel_x", "cel_y", "zostawiaj_feromon", "wiadomosc_do", "wiadomosc", "notatka",
+            "lekcja", "potwierdz_lekcje",
         ],
         "additionalProperties": False,
     },
@@ -102,6 +112,15 @@ Zostawiając feromon jedzenia na drodze od źródła do gniazda, ściągasz tam 
 Możesz pisać do innych mrówek-agentów: dzielcie się, gdzie jest nowe jedzenie i zagrożenie, \
 proście o pomoc, umawiajcie się. Pisz tylko wtedy, gdy masz coś nowego i ważnego - zwykle \
 wiadomość ma być null. Nie powtarzaj tego, co inni już wiedzą.
+
+Kolonia prowadzi Księgę mrowiska - wiedzę, którą przekazuje kolejnym pokoleniom i kolejnym \
+koloniom (mapa w każdej grze jest inna, więc współrzędne w Księdze nic nie znaczą). \
+Czytaj ją i kieruj się nią. Gdy nauczysz się czegoś ogólnego, co pomoże przetrwać, \
+zapisz to w polu "lekcja", np. "Pająki czatują przy roślinach na skraju mapy - zbieraj \
+bliżej gniazda" albo "Przed zimą zapas w gnieździe powinien przekraczać 300". \
+Nie dopisuj tego, co już jest w Księdze - wtedy podaj jej numer w "potwierdz_lekcje", \
+jeśli właśnie się sprawdziła. Zwykle oba pola są null; lekcja ma wynikać z tego, co \
+naprawdę się wydarzyło. Gdzie konkretnie jest jedzenie, zapisuj w "notatka".
 
 Za każdym razem dostajesz opis tego, co widzisz. Odpowiedz, wywołując narzędzie \
 "dzialaj" dokładnie raz. Myśli i wiadomości pisz po polsku, krótko i z charakterem."""
@@ -178,6 +197,7 @@ class AgentAnt:
         self.skrzynka = []
         self.znane_zagrozenia = set()
         self.zglosila_glod = False
+        self.okazja = None  # ważne zdarzenie, z którego warto wyciągnąć lekcję
 
         self.zapytanie = None  # Future z odpowiedzią Claude
         self.ostatnie_zapytanie = -1e9  # time.monotonic()
@@ -277,6 +297,7 @@ class AgentAnt:
         if not self.zglosila_glod and self.energy < self.max_energy * 0.3:
             self.zglosila_glod = True
             self.zdarzenie(dzien, "Kończą ci się siły.")
+            self.okazja = "Prawie padłaś z wyczerpania."
             self.potrzebna_decyzja = True
         if self.energy > self.max_energy * 0.6:
             self.zglosila_glod = False
@@ -361,6 +382,7 @@ class AgentAnt:
             return False
         if world.nest.food <= 0:
             self.zdarzenie(world.time / C.DAY_LENGTH_SECONDS, "W gnieździe nie ma jedzenia!")
+            self.okazja = "Przyszłaś się najeść, a w gnieździe nie było jedzenia."
             return False
         gain = min(C.ANT_ENERGY_REGEN * dt, self.max_energy - self.energy)
         self.energy += gain
@@ -409,6 +431,7 @@ class AgentAnt:
                     self.trafienia += 1
                     if sp.hp <= 0:
                         self.zdarzenie(dzien, f"Zabiłaś {nazwa}!")
+                        self.okazja = f"Pokonałaś {nazwa} w walce."
                         self._skoncz(f"Pokonałaś {nazwa}.")
                 ryzyko = C.AGENT_DEATH_CHANCE_FIGHTING / self.sila
             else:
@@ -426,6 +449,69 @@ class AgentAnt:
         return int(100 * self.energy / self.max_energy)
 
 
+class KsiegaMrowiska:
+    """Wspólna wiedza kolonii: ogólne lekcje zapisane przez agentki.
+
+    Lekcje potwierdzane przez kolejne agentki zyskują wagę; gdy Księga jest
+    pełna, wypada najsłabsza. Zapis do pliku ksiega_mrowiska.json, więc
+    wiedza przechodzi do następnych gier (plik jest w .gitignore).
+    """
+
+    def __init__(self, sciezka=None):
+        self.sciezka = sciezka or os.path.join(KATALOG, "ksiega_mrowiska.json")
+        self.lekcje = []  # dict(tekst, autor, kolonia, waga)
+        try:
+            with open(self.sciezka, encoding="utf-8") as f:
+                dane = json.load(f)
+            self.lekcje = [l for l in dane.get("lekcje", []) if isinstance(l, dict) and l.get("tekst")]
+        except (OSError, ValueError):
+            pass
+
+    def _zapisz(self):
+        try:
+            tmp = self.sciezka + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"lekcje": self.lekcje}, f, ensure_ascii=False, indent=1)
+            os.replace(tmp, self.sciezka)
+        except OSError:
+            pass  # np. przeglądarka - Księga działa wtedy tylko w tej grze
+
+    def posortowane(self):
+        return sorted(self.lekcje, key=lambda l: -l.get("waga", 1))
+
+    def dodaj(self, tekst, autor, kolonia):
+        tekst = " ".join(tekst.split())[:200]
+        if len(tekst) < 12:
+            return None
+        klucz = tekst.lower()
+        for l in self.lekcje:
+            if l["tekst"].lower() == klucz:
+                l["waga"] = l.get("waga", 1) + 1
+                self._zapisz()
+                return None
+        if len(self.lekcje) >= C.BOOK_MAX_LESSONS:
+            najslabsza = min(self.lekcje, key=lambda l: l.get("waga", 1))
+            self.lekcje.remove(najslabsza)
+        self.lekcje.append(dict(tekst=tekst, autor=autor, kolonia=kolonia, waga=1))
+        self._zapisz()
+        return tekst
+
+    def potwierdz(self, numer):
+        """Numer jak w opisie sytuacji (1 = najważniejsza)."""
+        lista = self.posortowane()[: C.BOOK_SHOWN]
+        if not isinstance(numer, int) or not 1 <= numer <= len(lista):
+            return None
+        lista[numer - 1]["waga"] = lista[numer - 1].get("waga", 1) + 1
+        self._zapisz()
+        return lista[numer - 1]["tekst"]
+
+    def opis(self):
+        return [
+            f"{i}. {l['tekst']} (waga {l.get('waga', 1)}; {l.get('autor', '?')}, {l.get('kolonia', '?')})"
+            for i, l in enumerate(self.posortowane()[: C.BOOK_SHOWN], start=1)
+        ]
+
+
 class ZarzadAgentow:
     """Trzyma mrówki-agentów, rozsyła zapytania do Claude i stosuje odpowiedzi."""
 
@@ -437,6 +523,10 @@ class ZarzadAgentow:
         self.pokolenie = {p["imie"]: 1 for p in self.profile}
         self.dziennik = deque(maxlen=C.AGENT_LOG_LINES)  # (kolor, tekst) - panel boczny
         self.pokaz_panel = True
+        self.ksiega = KsiegaMrowiska()
+        self.kolonia = f"{world.cfg['biome']}, {world.cfg['season']}"
+        self.spuscizna = {}  # imię -> notatki zmarłej agentki dla następczyni
+        self.potwierdzenia = set()  # (imię, tekst lekcji) - jedno potwierdzenie na agentkę
 
         self.zapytania = 0
         self.tokeny_we = 0
@@ -488,6 +578,9 @@ class ZarzadAgentow:
             for inny in self.agenci:
                 if inny.alive:
                     inny.zdarzenie(world.time / C.DAY_LENGTH_SECONDS, f"{a.imie} ({a.rola}) zginęła: {a.przyczyna}.")
+                    inny.okazja = f"{a.imie} ({a.rola}) zginęła: {a.przyczyna}. Ostatnio robiła: {a.akcja}."
+                    inny.potrzebna_decyzja = True
+            self.spuscizna[a.imie] = list(a.notatki)
             profil = next(p for p in self.profile if p["imie"] == a.imie)
             self.do_odrodzenia.append((world.time + C.AGENT_RESPAWN_TIME, profil))
         self.agenci = [a for a in self.agenci if a.alive]
@@ -498,7 +591,13 @@ class ZarzadAgentow:
                 self.do_odrodzenia.remove((kiedy, profil))
                 self.pokolenie[profil["imie"]] += 1
                 nowa = AgentAnt(profil, world.nest.pos)
-                nowa.notatki.append(f"Jesteś {self.pokolenie[profil['imie']]}. pokoleniem tej mrówki - poprzedniczka zginęła.")
+                # następczyni dostaje notatki poprzedniczki - wiedza o tej mapie nie ginie
+                for n in self.spuscizna.pop(profil["imie"], [])[-(C.AGENT_MEMORY_NOTES - 1):]:
+                    nowa.notatki.append(n)
+                nowa.notatki.append(
+                    f"Jesteś {self.pokolenie[profil['imie']]}. pokoleniem tej mrówki - poprzedniczka zginęła; "
+                    "notatki wyżej to jej wiedza."
+                )
                 self.agenci.append(nowa)
                 self.loguj(profil["kolor"], f"W gnieździe wykluła się nowa {profil['imie']}.")
 
@@ -512,6 +611,7 @@ class ZarzadAgentow:
         )
         opis = self._opis_sytuacji(a, world)
         a.skrzynka.clear()
+        a.okazja = None
         self.zapytania += 1
         a.zapytanie = self.wykonawca.submit(self._wywolaj_claude, system, opis)
 
@@ -555,6 +655,20 @@ class ZarzadAgentow:
             self.bledy += 1
             return
         self.status = f"model {C.AGENT_MODEL}"
+
+        lekcja = (decyzja.get("lekcja") or "").strip()
+        if lekcja:
+            dodana = self.ksiega.dodaj(lekcja, a.imie, self.kolonia)
+            if dodana:
+                self.loguj((255, 230, 150), f"[Księga] {a.imie} zapisuje: {dodana}")
+        numer = decyzja.get("potwierdz_lekcje")
+        lista = self.ksiega.posortowane()[: C.BOOK_SHOWN]
+        potwierdzona = None
+        if isinstance(numer, int) and 1 <= numer <= len(lista) and (a.imie, lista[numer - 1]["tekst"]) not in self.potwierdzenia:
+            self.potwierdzenia.add((a.imie, lista[numer - 1]["tekst"]))
+            potwierdzona = self.ksiega.potwierdz(numer)
+        if potwierdzona:
+            self.loguj((255, 230, 150), f"[Księga] {a.imie} potwierdza: {potwierdzona}")
 
         cel = None
         if decyzja.get("cel_x") is not None and decyzja.get("cel_y") is not None:
@@ -630,6 +744,11 @@ class ZarzadAgentow:
             L += ["", "Twoje notatki:"] + [f"- {n}" for n in a.notatki]
         if a.zdarzenia:
             L += ["", "Ostatnie zdarzenia:"] + [f"- {z}" for z in list(a.zdarzenia)[-6:]]
+        ksiega = self.ksiega.opis()
+        if a.okazja:
+            L += ["", f"WAŻNE ZDARZENIE: {a.okazja} Zastanów się, czego to uczy kolonię. Jeśli to wiedza, "
+                  "której nie ma w Księdze, zapisz ją w polu lekcja."]
+        L += ["", "Księga mrowiska (wiedza kolonii, od najważniejszej):"] + (ksiega or ["- jeszcze pusta"])
         L += ["", "Co robisz teraz? Wywołaj narzędzie dzialaj."]
         return "\n".join(L)
 
@@ -687,6 +806,7 @@ class ZarzadAgentow:
                                       + (f"  niesie {int(a.niesie)}" if a.niesie > 0 else "")))
         for kiedy, profil in self.do_odrodzenia:
             naglowek.append((profil["kolor"], f"{profil['imie']} - czeka na wyklucie"))
+        naglowek.append(((255, 230, 150), f"Księga mrowiska: {len(self.ksiega.lekcje)} lekcji"))
         naglowek.append(((160, 160, 160), "-" * 40))
         dziennik = []
         for kolor, tekst in self.dziennik:

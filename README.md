@@ -39,6 +39,17 @@ Model i tempo decyzji ustawia się w `config.py` (`AGENT_*`). Domyślnie
 `claude-haiku-5-5`: 5 agentek to ok. 30 zapytań na minutę, czyli ok. 1 USD
 na godzinę. Licznik zapytań i kosztu jest w HUD.
 
+### Księga mrowiska
+
+Kolonia się uczy. Po ważnym zdarzeniu (śmierć towarzyszki, pokonany pająk,
+pusty spichlerz, wyczerpanie) agentka zastanawia się, czego to uczy, i może
+zapisać ogólną lekcję w Księdze mrowiska. Inne agentki ją czytają, a gdy
+lekcja się sprawdzi, potwierdzają ją (każda raz na grę) - ważniejsze lekcje
+są wyżej. Księga trafia do pliku `ksiega_mrowiska.json` (poza gitem), więc
+każda następna kolonia zaczyna z wiedzą poprzednich. Przy pełnej Księdze
+(25 lekcji) wypada najsłabsza. Następczyni zabitej agentki dziedziczy też jej
+notatki o bieżącej mapie. Usunięcie pliku zaczyna naukę od zera.
+
 ## Sterowanie
 
 | Klawisz / mysz | Akcja |

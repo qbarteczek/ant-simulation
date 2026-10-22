@@ -370,3 +370,7 @@ AGENT_PROFILES = [
     dict(imie="Frania", rola="zbieraczka", kolor=(170, 230, 255),
          charakter="Jesteś spokojna i wytrwała. Wolisz pewne, znane źródła jedzenia niż ryzyko."),
 ]
+
+# --- Księga mrowiska (wspólna wiedza agentek, ksiega_mrowiska.json) ---------
+BOOK_MAX_LESSONS = 25  # tyle lekcji trzyma plik; przy przepełnieniu wypada najsłabsza
+BOOK_SHOWN = 12  # tyle najważniejszych lekcji trafia do opisu sytuacji agentki
