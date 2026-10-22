@@ -162,6 +162,7 @@ async def _run():
                 elif state == "SIM":
                     if event.type == pygame.KEYDOWN:
                         if event.key == pygame.K_ESCAPE:
+                            sim.close()
                             state = "MENU"
                         elif event.key == pygame.K_SPACE:
                             sim.paused = not sim.paused
@@ -170,7 +171,10 @@ async def _run():
                         elif event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
                             sim.speed_down()
                         elif event.key == pygame.K_r and last_cfg is not None:
+                            sim.close()
                             sim = Simulation(last_cfg)
+                        elif event.key == pygame.K_TAB:
+                            sim.toggle_agent_panel()
                     elif event.type == pygame.MOUSEBUTTONDOWN:
                         if event.button == 1:
                             sim.add_food_at(event.pos)
@@ -190,6 +194,8 @@ async def _run():
         pygame.display.flip()
         await asyncio.sleep(0)
 
+    if sim is not None:
+        sim.close()
     pygame.quit()
     sys.exit()
 

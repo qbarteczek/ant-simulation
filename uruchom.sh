@@ -23,7 +23,7 @@ if [ ! -x "$PY" ] || ! check_ok; then
     # Pythona (brak gotowych paczek -> błędy przy imporcie, np. modułu czcionek).
     # pygame-ce (community edition) to w pełni zgodny zamiennik (ten sam
     # "import pygame") z szybszym wsparciem nowych wersji Pythona.
-    if ! "$PY" -m pip install --quiet pygame-ce numpy >&2; then
+    if ! "$PY" -m pip install --quiet pygame-ce numpy anthropic >&2; then
         echo "[uruchom.sh] BŁĄD: nie udało się zainstalować pygame-ce/numpy przez pip." >&2
         exit 1
     fi

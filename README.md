@@ -18,6 +18,27 @@ Wersja przeglądarkowa bywa wolniejsza niż lokalna (WebAssembly), zwłaszcza pr
 bardzo dużych koloniach — do intensywnego eksperymentowania lepsza jest wersja
 lokalna poniżej.
 
+## Mrówki-agenci Claude
+
+Oprócz zwykłego roju po mapie chodzi kilka nazwanych mrówek (Zosia, Bogna,
+Hela, Tekla, Mela...), które myślą modelem Claude. Każda ma rolę
+(zwiadowczyni, żołnierka, zbieraczka, opiekunka gniazda), własną pamięć
+i co kilka sekund dostaje opis tego, co widzi: jedzenie, pająki i osy,
+zapas w gnieździe, inne agentki, wiadomości. Odpowiada decyzją: dokąd iść,
+co zrobić (zbierać, wracać, atakować, uciekać, zwiadować, odpoczywać),
+czy znakować drogę feromonem, za którym pójdzie rój, co powiedzieć
+innym i co zapamiętać. Myśli widać w dymkach, rozmowy w panelu po prawej
+(`Tab` go chowa). Zabita agentka po chwili wykluwa się na nowo.
+
+Liczbę agentek (0-8) ustawia się w menu. Do działania potrzebny jest klucz
+API Anthropic: zmienna `ANTHROPIC_API_KEY` albo plik `klucz_api.txt` obok
+`main.py` (jest w `.gitignore`). Bez klucza i w wersji przeglądarkowej
+agentki chodzą na prostym autopilocie.
+
+Model i tempo decyzji ustawia się w `config.py` (`AGENT_*`). Domyślnie
+`claude-haiku-5-5`: 5 agentek to ok. 30 zapytań na minutę, czyli ok. 1 USD
+na godzinę. Licznik zapytań i kosztu jest w HUD.
+
 ## Sterowanie
 
 | Klawisz / mysz | Akcja |
@@ -26,6 +47,7 @@ lokalna poniżej.
 | `+` / `-` | prędkość symulacji (x1…x20) |
 | Esc | powrót do menu |
 | `R` | restart z tym samym ustawieniem |
+| `Tab` | pokaż/ukryj panel mrówek-agentów |
 | LPM | zasadź roślinę w danym miejscu |
 | PPM | postaw przeszkodę |
 
@@ -41,7 +63,7 @@ Wymaga Pythona 3.10+, `pygame` (lub `pygame-ce`) i `numpy`.
 
 **Windows / ręcznie:**
 ```
-pip install pygame numpy
+pip install -r requirements.txt
 python main.py
 ```
 

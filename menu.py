@@ -25,6 +25,7 @@ class Menu:
         self.species = "Mrówka łąkowa"
         self.ant_count = C.ANT_COUNT_DEFAULT
         self.companions = {name: d["default"] for name, d in C.COMPANIONS.items()}
+        self.agents = C.AGENT_COUNT_DEFAULT
 
         self.biome_buttons = self._row_buttons(list(C.BIOMES.keys()), y=112, width=190)
         self.season_buttons = self._row_buttons(list(C.SEASONS.keys()), y=206, width=190)
@@ -37,6 +38,7 @@ class Menu:
             self.ant_plus,
             self.ant_coarse_plus,
         ) = self._ant_counter_rects(y=396)
+        self.agent_minus, self.agent_value, self.agent_plus = self._counter_row_rects(396, ctrl_x=1010)
 
         names = list(C.COMPANIONS.keys())
         half = (len(names) + 1) // 2
@@ -117,6 +119,11 @@ class Menu:
         elif self.ant_coarse_plus.collidepoint(pos):
             self.ant_count = min(C.ANT_COUNT_MAX, self.ant_count + C.ANT_COUNT_COARSE_STEP)
 
+        if self.agent_minus.collidepoint(pos):
+            self.agents = max(0, self.agents - 1)
+        elif self.agent_plus.collidepoint(pos):
+            self.agents = min(C.AGENT_COUNT_MAX, self.agents + 1)
+
         for name, ((minus, value, plus), y) in self.companion_rows.items():
             d = C.COMPANIONS[name]
             if minus.collidepoint(pos):
@@ -131,6 +138,7 @@ class Menu:
                 species=self.species,
                 ant_count=self.ant_count,
                 companions=dict(self.companions),
+                agents=self.agents,
             )
         return None
 
@@ -174,6 +182,12 @@ class Menu:
         self._draw_button(surface, self.ant_coarse_minus, "-250", False, self.font_small)
         self._draw_button(surface, self.ant_coarse_plus, "+250", False, self.font_small)
         self._draw_counter(surface, self.ant_minus, self.ant_value, self.ant_plus, self.ant_count)
+
+        agent_lbl = self.font_label.render("Agenci Claude", True, (150, 200, 255))
+        surface.blit(agent_lbl, (self.agent_minus.x - agent_lbl.get_width() - 14, 396 + 4))
+        agent_desc = self.font_small.render("(mrówki myślące modelem Claude)", True, (150, 152, 160))
+        surface.blit(agent_desc, (C.WIDTH - agent_desc.get_width() - 18, 396 + 40))
+        self._draw_counter(surface, self.agent_minus, self.agent_value, self.agent_plus, self.agents)
 
         self._section_label(surface, "Towarzyszące istoty", 462)
         descs = {

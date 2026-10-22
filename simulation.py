@@ -20,6 +20,7 @@ from entities import (
     Spider,
     Wasp,
 )
+from agenci import ZarzadAgentow
 from pheromone import PheromoneGrid
 from swarm import AntSwarm
 
@@ -83,6 +84,20 @@ class Simulation:
         self.speed_mult = C.SPEED_LEVELS[self.speed_idx]
         self.bg_surface = self._build_background()
         self.font = pygame.font.Font(None, 20)
+        self.font_small = pygame.font.Font(None, 17)
+
+        # mrówki-agenci Claude (agenci.py); 0 = wyłączone, np. w balance_test.py
+        n_agents = cfg.get("agents", 0)
+        self.agents = ZarzadAgentow(n_agents, self) if n_agents > 0 else None
+
+    def close(self):
+        """Zatrzymuje wątki zapytań do Claude (przy wyjściu, resecie, powrocie do menu)."""
+        if self.agents is not None:
+            self.agents.zamknij()
+
+    def toggle_agent_panel(self):
+        if self.agents is not None:
+            self.agents.pokaz_panel = not self.agents.pokaz_panel
 
     # --- inicjalizacja sceny -------------------------------------------------
     def _random_pos(self, min_dist_from_nest=80, margin=40):
@@ -261,6 +276,8 @@ class Simulation:
         )
 
         self.ant_swarm.update(dt, self)
+        if self.agents is not None:
+            self.agents.update(dt, self)
         self._resolve_ant_predator_combat(dt)
 
         newborn_spiders = []
@@ -473,6 +490,8 @@ class Simulation:
         self.pher.render(surface)
 
         self._draw_ants(surface)
+        if self.agents is not None:
+            self.agents.draw(surface, self.font, self.font_small)
         for sp in self.spiders:
             self._draw_spider(surface, sp)
         for w in self.wasps:
@@ -799,7 +818,8 @@ class Simulation:
             + ("   [PAUZA]" if self.paused else ""),
             self._weather_line(),
             self._evolution_line(n),
-            "SPACJA=pauza  +/-=predkosc(x1..x20)  ESC=menu  R=reset  LPM=zasadz roslinę  PPM=przeszkoda",
+            *([self.agents.linia_hud()] if self.agents is not None else []),
+            "SPACJA=pauza  +/-=predkosc(x1..x20)  ESC=menu  R=reset  LPM=zasadz roslinę  PPM=przeszkoda  TAB=panel agentów",
         ]
         box_h = 18 * len(lines) + 14
         panel = pygame.Surface((640, box_h), pygame.SRCALPHA)

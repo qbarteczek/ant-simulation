@@ -318,3 +318,55 @@ CORPSE_BIOMASS = {"spider": 6.0, "wasp": 3.0, "ladybug": 2.5, "beetle": 3.0, "an
 MAX_CORPSES = 60
 
 DAY_LENGTH_SECONDS = 45.0
+
+# --- Mrówki-agenci Claude (agenci.py) -------------------------------------
+# Kilka nazwanych mrówek, które co kilka sekund pytają model Claude, co robić.
+# Koszt: przy 5 agentach i Haiku 5.5 ok. 1-2 zł za godzinę działania.
+AGENT_COUNT_DEFAULT = 5
+AGENT_COUNT_MAX = 8
+AGENT_MODEL = "claude-haiku-5-5"
+AGENT_PRICE_IN_PER_MTOK = 0.10  # USD za 1 mln tokenów wejścia (Haiku 5.5)
+AGENT_PRICE_OUT_PER_MTOK = 0.50  # USD za 1 mln tokenów wyjścia
+AGENT_EFFORT = "low"
+AGENT_MAX_TOKENS = 1024
+AGENT_DECISION_INTERVAL = 20.0  # s czasu rzeczywistego - najdłuższa przerwa między decyzjami
+AGENT_MIN_GAP = 5.0  # s czasu rzeczywistego - najkrótsza przerwa między zapytaniami jednej mrówki
+AGENT_VIEW_RADIUS = 220.0  # px - tyle mrówka "widzi" w opisie sytuacji
+AGENT_SPEED_MULT = 1.15
+AGENT_LOAD = 36.0  # agentka niesie 2x tyle co zwykła mrówka
+AGENT_PHEROMONE = 900.0  # siła feromonu przy znakowaniu szlaku
+AGENT_HIT_CHANCE = 1.2  # / s przy ataku (razy siła)
+AGENT_DEATH_CHANCE = 0.25  # / s w zasięgu drapieżnika, gdy nie walczy
+AGENT_DEATH_CHANCE_FIGHTING = 0.08  # / s w walce (dzielone przez siłę)
+AGENT_RESPAWN_TIME = 60.0  # s symulacji do wyklucia następczyni
+AGENT_RESPAWN_FOOD = 40.0
+AGENT_MEMORY_NOTES = 6
+AGENT_MEMORY_EVENTS = 10
+AGENT_THOUGHT_SECONDS = 7.0
+AGENT_INBOX_MAX = 4
+AGENT_LOG_LINES = 40
+AGENT_PANEL_MAX_LINES = 22
+
+AGENT_PROFILES = [
+    dict(imie="Zosia", rola="zwiadowczyni", kolor=(90, 200, 255), szybkosc=1.3,
+         charakter="Jesteś ciekawska i odważna. Szukasz nowych źródeł jedzenia daleko od gniazda, "
+                   "znakujesz do nich szlaki feromonem i mówisz innym, co znalazłaś."),
+    dict(imie="Bogna", rola="żołnierka", kolor=(255, 95, 75), sila=2.5,
+         charakter="Jesteś dzielna i opiekuńcza. Bronisz zbieraczek i gniazda przed pająkami i osami. "
+                   "Atakujesz, gdy wróg jest blisko innych mrówek, ale nie szarżujesz na ślepo z małą energią."),
+    dict(imie="Hela", rola="zbieraczka", kolor=(255, 210, 80),
+         charakter="Jesteś pracowita i praktyczna. Nosisz jedzenie do gniazda, wybierasz bliskie, "
+                   "obfite źródła i zostawiasz feromon, żeby rój poszedł za tobą."),
+    dict(imie="Tekla", rola="opiekunka gniazda", kolor=(200, 140, 255),
+         charakter="Jesteś rozważna i lubisz planować. Pilnujesz zapasów, trzymasz się blisko gniazda, "
+                   "a gdy zapas maleje albo zbliża się zima, organizujesz innych wiadomościami."),
+    dict(imie="Mela", rola="zwiadowczyni", kolor=(120, 255, 150), szybkosc=1.3,
+         charakter="Jesteś ostrożna i spostrzegawcza. Badasz rzadko odwiedzane krańce mapy, "
+                   "omijasz drapieżniki i ostrzegasz przed nimi innych."),
+    dict(imie="Kinga", rola="żołnierka", kolor=(255, 150, 60), sila=2.5,
+         charakter="Jesteś porywcza, ale lojalna. Patrolujesz okolice szlaków i odpowiadasz na wezwania o pomoc."),
+    dict(imie="Ola", rola="zbieraczka", kolor=(255, 240, 140),
+         charakter="Jesteś wesoła i gadatliwa. Zbierasz jedzenie i chętnie dzielisz się wieściami z innymi."),
+    dict(imie="Frania", rola="zbieraczka", kolor=(170, 230, 255),
+         charakter="Jesteś spokojna i wytrwała. Wolisz pewne, znane źródła jedzenia niż ryzyko."),
+]
