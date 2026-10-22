@@ -7,7 +7,19 @@ import pygame
 from pygame.math import Vector2
 
 import config as C
-from entities import AphidCluster, Ladybug, Nest, Obstacle, Plant, Spider
+from entities import (
+    AphidCluster,
+    Beetle,
+    BirdFlock,
+    Corpse,
+    Earthworm,
+    Ladybug,
+    Nest,
+    Obstacle,
+    Plant,
+    Spider,
+    Wasp,
+)
 from pheromone import PheromoneGrid
 from swarm import AntSwarm
 
@@ -39,6 +51,18 @@ class Simulation:
         self.ladybugs = [
             Ladybug(self._random_pos(100)) for _ in range(cfg["companions"].get("Biedronki", 0))
         ]
+        self.wasps = [
+            Wasp(self._random_pos(150)) for _ in range(cfg["companions"].get("Osy", 0))
+        ]
+        self.beetles = [
+            Beetle(self._random_pos(80)) for _ in range(cfg["companions"].get("Chrząszcze", 0))
+        ]
+        self.earthworms = [
+            Earthworm(self._random_pos(60)) for _ in range(cfg["companions"].get("Dżdżownice", 0))
+        ]
+        self.corpses = []
+        self.bird_flocks = []
+        self.bird_cooldown = random.uniform(*C.BIRD_COOLDOWN)
 
         self.ant_swarm = AntSwarm(C.MAX_POPULATION, self.species_name, cfg["biome"])
         self.ant_swarm.spawn(cfg["ant_count"], self.nest.pos)
@@ -47,12 +71,13 @@ class Simulation:
         self.daylight = 1.0
         self.temperature = C.SEASON_TEMP_BASE[cfg["season"]]
         self._temp_noise = 0.0
-        self.weather = "clear"  # "clear" | "rain" | "snow"
+        self.weather = "clear"  # "clear" | "rain" | "snow" | "drought"
         self.precip_intensity = 0.0
         self.weather_timer = random.uniform(*C.WEATHER_CHECK_INTERVAL)
         self.wind = 0.2
         self._rain_particles = None
         self._snow_particles = None
+        self._dust_particles = None
         self.paused = False
         self.speed_idx = 0
         self.speed_mult = C.SPEED_LEVELS[self.speed_idx]
@@ -82,10 +107,14 @@ class Simulation:
             C.MAX_PLANTS,
             max(4, int(C.PLANT_COUNT_BASE * self.biome["food_density"] * self.economy_scale)),
         )
+        mix = self.biome["plant_mix"]
+        species_names = list(mix.keys())
+        weights = list(mix.values())
         plants = []
         for _ in range(count):
             pos = self._random_pos(140)
-            plants.append(Plant(pos, mature=True))
+            species_name = random.choices(species_names, weights=weights, k=1)[0]
+            plants.append(Plant(pos, species_name, mature=True))
         return plants
 
     def _make_aphid_clusters(self, total_aphids):
@@ -129,6 +158,32 @@ class Simulation:
                 bestd, best = d, c
         return best
 
+    def nearest_corpse_within(self, pos, radius):
+        best, bestd = None, None
+        for c in self.corpses:
+            d = pos.distance_to(c.pos)
+            if d <= radius and (bestd is None or d < bestd):
+                bestd, best = d, c
+        return best
+
+    def nearest_plant_within(self, pos, radius):
+        best, bestd = None, None
+        for p in self.plants:
+            d = pos.distance_to(p.pos)
+            if d <= radius and (bestd is None or d < bestd):
+                bestd, best = d, p
+        return best
+
+    def fertilize_near(self, pos, radius, amount):
+        for p in self.plants:
+            if pos.distance_to(p.pos) <= radius:
+                p.fertilize(amount)
+
+    def spawn_corpse(self, pos, kind):
+        if len(self.corpses) >= C.MAX_CORPSES:
+            return
+        self.corpses.append(Corpse(pos, kind))
+
     def ants_near(self, pos, radius):
         """Indeksy i pozycje żywych mrówek w promieniu - używane przez pająki."""
         swarm = self.ant_swarm
@@ -149,7 +204,9 @@ class Simulation:
     # --- interakcje myszą -----------------------------------------------------
     def add_food_at(self, pos):
         if len(self.plants) < C.MAX_PLANTS:
-            self.plants.append(Plant(Vector2(pos), mature=True))
+            mix = self.biome["plant_mix"]
+            species_name = random.choices(list(mix.keys()), weights=list(mix.values()), k=1)[0]
+            self.plants.append(Plant(Vector2(pos), species_name, mature=True))
 
     def add_obstacle_at(self, pos):
         self.obstacles.append(Obstacle(Vector2(pos), random.randint(12, 22)))
@@ -176,7 +233,8 @@ class Simulation:
     def _update_once(self, dt):
         self.time += dt
         phase = (self.time % C.DAY_LENGTH_SECONDS) / C.DAY_LENGTH_SECONDS
-        self.daylight = 0.5 + 0.5 * math.cos(2 * math.pi * phase)
+        mean, amplitude = C.SEASON_DAYLIGHT_PARAMS[self.cfg["season"]]
+        self.daylight = max(0.03, min(1.0, mean + amplitude * math.cos(2 * math.pi * phase)))
 
         self._update_weather(dt)
 
@@ -189,6 +247,8 @@ class Simulation:
         elif self.weather == "snow":
             precip_factor = 1.0 - 0.45 * self.precip_intensity
             food_weather_factor = 1.0 - 0.5 * self.precip_intensity
+        elif self.weather == "drought":
+            food_weather_factor = 1.0 - 0.45 * self.precip_intensity
         wind_factor = 1.0 - 0.15 * self.wind
 
         # kilka mnożników z osobna mogłoby zbić aktywność do zera w skrajnej
@@ -201,7 +261,7 @@ class Simulation:
         )
 
         self.ant_swarm.update(dt, self)
-        self._resolve_ant_spider_combat(dt)
+        self._resolve_ant_predator_combat(dt)
 
         newborn_spiders = []
         for s in self.spiders:
@@ -210,12 +270,33 @@ class Simulation:
                 newborn_spiders.append(child)
         self.spiders = [s for s in self.spiders if s.alive] + newborn_spiders
 
+        newborn_wasps = []
+        for w in self.wasps:
+            child = w.update(dt, self)
+            if child is not None:
+                newborn_wasps.append(child)
+        self.wasps = [w for w in self.wasps if w.alive] + newborn_wasps
+
         newborn_ladybugs = []
         for lb in self.ladybugs:
             child = lb.update(dt, self)
             if child is not None:
                 newborn_ladybugs.append(child)
         self.ladybugs = [lb for lb in self.ladybugs if lb.alive] + newborn_ladybugs
+
+        newborn_beetles = []
+        for b in self.beetles:
+            child = b.update(dt, self)
+            if child is not None:
+                newborn_beetles.append(child)
+        self.beetles = [b for b in self.beetles if b.alive] + newborn_beetles
+
+        newborn_worms = []
+        for ew in self.earthworms:
+            child = ew.update(dt, self)
+            if child is not None:
+                newborn_worms.append(child)
+        self.earthworms = [ew for ew in self.earthworms if ew.alive] + newborn_worms
 
         for c in self.aphids:
             c.update(dt, self)
@@ -226,6 +307,9 @@ class Simulation:
             if child is not None:
                 newborn_plants.append(child)
         self.plants = [p for p in self.plants if p.alive] + newborn_plants
+
+        self.corpses = [c for c in self.corpses if c.update(dt)]
+        self._update_bird_flocks(dt)
 
         self.pher.evaporate(dt, wind=self.wind)
         self._handle_spawning()
@@ -245,6 +329,8 @@ class Simulation:
             precip_cooling = -2.0 * self.precip_intensity
         elif self.weather == "snow":
             precip_cooling = -3.0 * self.precip_intensity
+        elif self.weather == "drought":
+            precip_cooling = 2.5 * self.precip_intensity  # susza = fala upałów, nie chłodzenia
         self.temperature = base_temp + day_swing + self._temp_noise + precip_cooling
 
         # wiatr - wolny losowy spacer w granicach [MIN, MAX]
@@ -257,6 +343,7 @@ class Simulation:
                 roll = random.random()
                 snow_p = C.WEATHER_SNOW_CHANCE.get(season_name, 0.0)
                 rain_p = C.WEATHER_RAIN_CHANCE.get(season_name, 0.0)
+                drought_p = C.WEATHER_DROUGHT_CHANCE.get(season_name, 0.0)
                 if roll < snow_p:
                     self.weather = "snow"
                     self.precip_intensity = random.uniform(0.4, 1.0)
@@ -265,6 +352,10 @@ class Simulation:
                     self.weather = "rain"
                     self.precip_intensity = random.uniform(0.4, 1.0)
                     self.weather_timer = random.uniform(*C.WEATHER_DURATION)
+                elif roll < snow_p + rain_p + drought_p:
+                    self.weather = "drought"
+                    self.precip_intensity = random.uniform(0.4, 1.0)
+                    self.weather_timer = random.uniform(*C.WEATHER_DROUGHT_DURATION)
                 else:
                     self.weather_timer = random.uniform(*C.WEATHER_CHECK_INTERVAL)
             else:
@@ -289,12 +380,13 @@ class Simulation:
             return 1.0 - (temp - 28) / 8 * 0.25
         return 0.75
 
-    def _resolve_ant_spider_combat(self, dt):
+    def _resolve_ant_predator_combat(self, dt):
         swarm = self.ant_swarm
-        for sp in self.spiders:
+        for sp in self.spiders + self.wasps:
             if not sp.alive:
                 continue
-            idx, _, _ = self.ants_near(sp.pos, C.SPIDER_ATTACK_RADIUS)
+            attack_radius = C.SPIDER_ATTACK_RADIUS if isinstance(sp, Spider) else C.WASP_ATTACK_RADIUS
+            idx, _, _ = self.ants_near(sp.pos, attack_radius)
             if idx.size == 0:
                 continue
             # tylko mrówki, które faktycznie zauważyły zagrożenie i się bronią -
@@ -303,12 +395,40 @@ class Simulation:
             if idx.size == 0:
                 continue
             # pojedyncza mrówka rzadko coś zdziała - dopiero liczny rój
-            # ma realną szansę zabić pająka w rozsądnym czasie
+            # ma realną szansę zabić drapieżnika w rozsądnym czasie
             # (siła jest teraz cechą dziedziczoną per mrówka, więc silniejsze
             # linie genetyczne realnie skuteczniej bronią kolonii)
             hit_chance = 0.15 * swarm.strength[idx] * dt
             hits = np.random.random(idx.size) < hit_chance
             sp.hp -= int(hits.sum())
+
+    def _update_bird_flocks(self, dt):
+        for flock in self.bird_flocks:
+            flock.update(dt, self)
+        self.bird_flocks = [f for f in self.bird_flocks if f.alive]
+
+        if self.bird_flocks:
+            return
+        self.bird_cooldown -= dt
+        if self.bird_cooldown > 0:
+            return
+
+        pressure = len(self.spiders) + len(self.wasps) + len(self.ladybugs)
+        if pressure < C.BIRD_TRIGGER_THRESHOLD or len(self.bird_flocks) >= C.MAX_CONCURRENT_BIRD_FLOCKS:
+            self.bird_cooldown = random.uniform(*C.BIRD_COOLDOWN)
+            return
+
+        edge = random.choice(["top", "bottom", "left", "right"])
+        if edge == "top":
+            pos = Vector2(random.uniform(0, C.WIDTH), 0)
+        elif edge == "bottom":
+            pos = Vector2(random.uniform(0, C.WIDTH), C.HEIGHT)
+        elif edge == "left":
+            pos = Vector2(0, random.uniform(0, C.HEIGHT))
+        else:
+            pos = Vector2(C.WIDTH, random.uniform(0, C.HEIGHT))
+        self.bird_flocks.append(BirdFlock(pos))
+        self.bird_cooldown = random.uniform(*C.BIRD_COOLDOWN)
 
     def _handle_spawning(self):
         # dolny próg mnożnika NIE może być zbyt niski - inaczej zimą próg
@@ -316,10 +436,22 @@ class Simulation:
         # usycha mimo pełnego magazynu jedzenia (pułapka wymarcia)
         effective_cost = C.SPAWN_FOOD_COST / max(0.4, self.mods["spawn"])
         capacity_left = self.ant_swarm.capacity - self.ant_swarm.n
-        if capacity_left <= 0 or self.nest.food < effective_cost:
+        # rezerwa jedzenia NIEnaruszalna przez zakup nowych robotnic - bez niej
+        # kolonia potrafi w jednej chwili wydać cały zapas na "boom" nowych
+        # mrówek, zostawiając 0 jedzenia na regenerację energii już żyjących -
+        # te wracają głodne, nie mają czym się nakarmić, wracają w pole i giną
+        # w drodze, co po wielu takich cyklach (wykryte dopiero w wielomiesięcznym
+        # teście) prowadzi do nieodwracalnego wymarcia (n=0 => nikt już nie
+        # zbiera jedzenia). Rezerwa skaluje się z docelową wielkością kolonii.
+        reserve = C.NEST_FOOD_RESERVE_BASE * self.economy_scale
+        spendable = self.nest.food - reserve
+        if capacity_left <= 0 or spendable < effective_cost:
             return
-        affordable = int(self.nest.food // effective_cost)
-        count = min(affordable, capacity_left)
+        affordable = int(spendable // effective_cost)
+        # twardy limit na liczbę robotnic kupowanych jednorazowo - zapobiega
+        # gwałtownym skokom populacji, które wyprzedzają zdolność zaopatrzenia
+        max_per_tick = max(2, int(C.SPAWN_MAX_PER_TICK_BASE * self.economy_scale))
+        count = min(affordable, capacity_left, max_per_tick)
         if count > 0:
             self.nest.food -= count * effective_cost
             self.ant_swarm.spawn(count, self.nest.pos)
@@ -334,6 +466,8 @@ class Simulation:
             self._draw_plant(surface, p)
         for cl in self.aphids:
             self._draw_aphid_cluster(surface, cl)
+        for co in self.corpses:
+            self._draw_corpse(surface, co)
         self._draw_nest(surface)
 
         self.pher.render(surface)
@@ -341,8 +475,16 @@ class Simulation:
         self._draw_ants(surface)
         for sp in self.spiders:
             self._draw_spider(surface, sp)
+        for w in self.wasps:
+            self._draw_wasp(surface, w)
         for lb in self.ladybugs:
             self._draw_ladybug(surface, lb)
+        for be in self.beetles:
+            self._draw_beetle(surface, be)
+        for ew in self.earthworms:
+            self._draw_earthworm(surface, ew)
+        for flock in self.bird_flocks:
+            self._draw_bird_flock(surface, flock)
 
         tint = self.season["tint"]
         if tint is not None:
@@ -364,6 +506,8 @@ class Simulation:
             self._draw_rain(surface)
         elif self.weather == "snow":
             self._draw_snow(surface)
+        elif self.weather == "drought":
+            self._draw_dust(surface)
 
     def _draw_rain(self, surface):
         if self._rain_particles is None:
@@ -417,6 +561,32 @@ class Simulation:
         for x, y, _ in pts[:n]:
             pygame.draw.circle(surface, color, (int(x), int(y)), 2)
 
+    def _draw_dust(self, surface):
+        if self._dust_particles is None:
+            self._dust_particles = np.column_stack(
+                [
+                    np.random.uniform(0, C.WIDTH, C.DUST_PARTICLE_COUNT),
+                    np.random.uniform(0, C.HEIGHT, C.DUST_PARTICLE_COUNT),
+                ]
+            ).astype(np.float32)
+        pts = self._dust_particles
+        drift_x = 12 + (self.wind - 0.25) * 20
+        pts[:, 0] += drift_x
+        pts[:, 1] += (self.wind - 0.5) * 4
+        wrap = pts[:, 0] > C.WIDTH
+        if wrap.any():
+            pts[wrap, 0] -= C.WIDTH
+            pts[wrap, 1] = np.random.uniform(0, C.HEIGHT, int(wrap.sum()))
+        pts[:, 1] %= C.HEIGHT
+
+        n = max(1, int(C.DUST_PARTICLE_COUNT * self.precip_intensity))
+        color = (196, 168, 108)
+        for x, y in pts[:n]:
+            pygame.draw.circle(surface, color, (int(x), int(y)), 1)
+        overlay = pygame.Surface((C.WIDTH, C.HEIGHT), pygame.SRCALPHA)
+        overlay.fill((210, 170, 90, int(18 * self.precip_intensity)))
+        surface.blit(overlay, (0, 0))
+
     def _draw_obstacle(self, surface, obs):
         shape = self.biome["obstacle_shape"]
         color = self.biome["obstacle_color"]
@@ -435,14 +605,22 @@ class Simulation:
 
     def _draw_plant(self, surface, p):
         x, y = int(p.pos.x), int(p.pos.y)
+        color = p.spec["color"]
         if p.growth < 1.0:
             r = max(2, int(p.radius))
-            pygame.draw.circle(surface, (120, 170, 80), (x, y), r)
+            pygame.draw.circle(surface, color, (x, y), r)
             return
-        frac = max(0.2, p.stock / C.PLANT_STOCK_MAX)
+        frac = max(0.2, p.stock / p.spec["stock_max"])
         r = int(p.radius)
-        pygame.draw.circle(surface, (60, 110, 40), (x, y), r, width=2)
-        pygame.draw.circle(surface, (100, 175, 70), (x, y), max(3, int(r * frac)))
+        outline = tuple(max(0, c - 40) for c in color)
+        pygame.draw.circle(surface, outline, (x, y), r, width=2)
+        pygame.draw.circle(surface, color, (x, y), max(3, int(r * frac)))
+        if p.fertility_bonus > 0.05:
+            glow_r = r + 4
+            s = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+            alpha = int(120 * min(1.0, p.fertility_bonus / C.PLANT_FERTILITY_MAX))
+            pygame.draw.circle(s, (150, 110, 60, alpha), (glow_r, glow_r), glow_r, width=2)
+            surface.blit(s, (x - glow_r, y - glow_r))
 
     def _draw_aphid_cluster(self, surface, cl):
         bx, by = int(cl.pos.x), int(cl.pos.y)
@@ -542,8 +720,52 @@ class Simulation:
         pygame.draw.circle(surface, (20, 20, 20), (x, y), 4, width=1)
         pygame.draw.circle(surface, (20, 20, 20), (x - 1, y - 1), 1)
 
+    def _draw_wasp(self, surface, w):
+        x, y = int(w.pos.x), int(w.pos.y)
+        hx = x + int(math.cos(w.angle) * 5)
+        hy = y + int(math.sin(w.angle) * 5)
+        pygame.draw.line(surface, (40, 30, 10), (x, y), (hx, hy), 2)
+        pygame.draw.circle(surface, (235, 195, 40), (x, y), 3)
+        pygame.draw.circle(surface, (30, 25, 10), (x, y), 3, width=1)
+
+    def _draw_beetle(self, surface, be):
+        x, y = int(be.pos.x), int(be.pos.y)
+        rect = pygame.Rect(0, 0, 9, 6)
+        rect.center = (x, y)
+        pygame.draw.ellipse(surface, (45, 35, 25), rect)
+        pygame.draw.ellipse(surface, (20, 15, 10), rect, width=1)
+
+    def _draw_earthworm(self, surface, ew):
+        x, y = int(ew.pos.x), int(ew.pos.y)
+        tail = ew.pos - Vector2(math.cos(ew.angle), math.sin(ew.angle)) * 6
+        pygame.draw.line(surface, (210, 140, 150), (x, y), (int(tail.x), int(tail.y)), 2)
+
+    def _draw_corpse(self, surface, co):
+        x, y = int(co.pos.x), int(co.pos.y)
+        frac = max(0.2, co.biomass / max(0.1, C.CORPSE_BIOMASS.get(co.kind, 1.0)))
+        r = max(2, int(3 + frac * 3))
+        pygame.draw.circle(surface, (90, 75, 60), (x, y), r)
+
+    def _draw_bird_flock(self, surface, flock):
+        x, y = int(flock.pos.x), int(flock.pos.y)
+        for i in range(flock.count):
+            off = (i - flock.count / 2) * 7
+            wx = x + int(math.cos(flock.angle + math.pi / 2) * off)
+            wy = y + int(math.sin(flock.angle + math.pi / 2) * off)
+            span = 5
+            hx = wx + int(math.cos(flock.angle) * span)
+            hy = wy + int(math.sin(flock.angle) * span)
+            lx = wx - int(math.cos(flock.angle - 0.9) * span)
+            ly = wy - int(math.sin(flock.angle - 0.9) * span)
+            rx = wx - int(math.cos(flock.angle + 0.9) * span)
+            ry = wy - int(math.sin(flock.angle + 0.9) * span)
+            pygame.draw.line(surface, (30, 30, 35), (lx, ly), (hx, hy), 1)
+            pygame.draw.line(surface, (30, 30, 35), (rx, ry), (hx, hy), 1)
+
     def _weather_line(self):
-        weather_label = {"clear": "bezchmurnie", "rain": "deszcz", "snow": "śnieg"}[self.weather]
+        weather_label = {
+            "clear": "bezchmurnie", "rain": "deszcz", "snow": "śnieg", "drought": "susza",
+        }[self.weather]
         extra = f" ({self.precip_intensity*100:.0f}%)" if self.weather != "clear" else ""
         return (
             f"Pogoda: {self.temperature:+.1f}°C   {weather_label}{extra}   Wiatr: {self.wind:.2f}"
@@ -569,7 +791,10 @@ class Simulation:
             f"Biom: {self.cfg['biome']}   Pora roku: {self.cfg['season']}   Gatunek: {self.cfg['species']}",
             f"Populacja: {n}/{C.MAX_POPULATION}   Jedzenie w gnieździe: {int(self.nest.food)}"
             f"   Rośliny: {len(self.plants)}/{C.MAX_PLANTS}   Kopiec: poziom {self.mound_level()}/6",
-            f"Mszyce: {sum(c.count for c in self.aphids)}   Pająki: {len(self.spiders)}   Biedronki: {len(self.ladybugs)}",
+            f"Mszyce: {sum(c.count for c in self.aphids)}   Pająki: {len(self.spiders)}   Osy: {len(self.wasps)}"
+            f"   Biedronki: {len(self.ladybugs)}",
+            f"Chrząszcze: {len(self.beetles)}   Dżdżownice: {len(self.earthworms)}"
+            f"   Truchła: {len(self.corpses)}   Stada ptaków: {len(self.bird_flocks)}",
             f"Dzień symulacji: {self.time / C.DAY_LENGTH_SECONDS:.2f} ({day_label})   Prędkość: x{self.speed_mult}"
             + ("   [PAUZA]" if self.paused else ""),
             self._weather_line(),

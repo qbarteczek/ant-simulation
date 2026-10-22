@@ -169,8 +169,8 @@ class AntSwarm:
             da = np.arctan2(world.nest.pos.y - y[near_nest], world.nest.pos.x - x[near_nest])
             angle[near_nest] = _lerp_angle(angle[near_nest], da, 0.25)
 
-        # --- nadpisanie: zagrożenie ze strony pająków (najwyższy priorytet) -------
-        for sp in world.spiders:
+        # --- nadpisanie: zagrożenie ze strony pająków/os (najwyższy priorytet) ----
+        for sp in world.spiders + world.wasps:
             if not sp.alive:
                 continue
             dx = x - sp.pos.x

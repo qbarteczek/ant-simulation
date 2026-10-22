@@ -7,6 +7,11 @@ PANEL_CENTER_X = C.WIDTH // 2
 ROW_LABEL_X = PANEL_CENTER_X - 260
 ROW_CTRL_X = PANEL_CENTER_X + 20
 
+# Towarzyszące istoty: sześć gatunków nie mieści się w jednej kolumnie -
+# układ dwukolumnowy, lewa i prawa kolumna lustrzane względem środka.
+LEFT_LABEL_X, LEFT_CTRL_X = 60, 340
+RIGHT_LABEL_X, RIGHT_CTRL_X = 620, 900
+
 
 class Menu:
     def __init__(self):
@@ -33,11 +38,22 @@ class Menu:
             self.ant_coarse_plus,
         ) = self._ant_counter_rects(y=396)
 
+        names = list(C.COMPANIONS.keys())
+        half = (len(names) + 1) // 2
+        left_names, right_names = names[:half], names[half:]
         self.companion_rows = {}
+        self.companion_label_x = {}
         row_y = 486
-        for name in C.COMPANIONS:
-            self.companion_rows[name] = (self._counter_row_rects(row_y), row_y)
-            row_y += 64
+        for i in range(max(len(left_names), len(right_names))):
+            y = row_y + i * 64
+            if i < len(left_names):
+                name = left_names[i]
+                self.companion_rows[name] = (self._counter_row_rects(y, ctrl_x=LEFT_CTRL_X), y)
+                self.companion_label_x[name] = LEFT_LABEL_X
+            if i < len(right_names):
+                name = right_names[i]
+                self.companion_rows[name] = (self._counter_row_rects(y, ctrl_x=RIGHT_CTRL_X), y)
+                self.companion_label_x[name] = RIGHT_LABEL_X
 
         self.start_button = pygame.Rect(0, 0, 300, 58)
         self.start_button.center = (C.WIDTH // 2, C.HEIGHT - 55)
@@ -64,14 +80,14 @@ class Menu:
         coarse_plus = pygame.Rect(plus.right + gap, y, coarse_w, 36)
         return coarse_minus, minus, value, plus, coarse_plus
 
-    def _counter_row_rects(self, y, centered=False):
+    def _counter_row_rects(self, y, centered=False, ctrl_x=None):
         if centered:
             btn_w, box_w, gap = 44, 90, 12
             total_w = btn_w + gap + box_w + gap + btn_w
             start_x = (C.WIDTH - total_w) // 2
         else:
             btn_w, box_w, gap = 36, 80, 10
-            start_x = ROW_CTRL_X
+            start_x = ROW_CTRL_X if ctrl_x is None else ctrl_x
         minus = pygame.Rect(start_x, y, btn_w, 36)
         value = pygame.Rect(start_x + btn_w + gap, y, box_w, 36)
         plus = pygame.Rect(start_x + btn_w + gap + box_w + gap, y, btn_w, 36)
@@ -164,12 +180,16 @@ class Menu:
             "Mszyce": "(dają miodową spadź - dodatkowe źródło jedzenia)",
             "Pająki": "(polują na pojedyncze mrówki, uciekają przed grupą)",
             "Biedronki": "(żywią się mszycami, zmniejszając ich populację)",
+            "Osy": "(polują na mszyce, głodne - też na mrówki)",
+            "Chrząszcze": "(zjadają truchła, użyźniając pobliskie rośliny)",
+            "Dżdżownice": "(poprawiają żyzność gleby wokół roślin)",
         }
         for name, ((minus, value, plus), y) in self.companion_rows.items():
+            label_x = self.companion_label_x[name]
             label_txt = self.font_label.render(name, True, (230, 230, 225))
-            surface.blit(label_txt, (ROW_LABEL_X, y + 4))
+            surface.blit(label_txt, (label_x, y + 4))
             desc_txt = self.font_small.render(descs[name], True, (150, 152, 160))
-            surface.blit(desc_txt, (ROW_LABEL_X, y + 28))
+            surface.blit(desc_txt, (label_x, y + 28))
             self._draw_counter(surface, minus, value, plus, self.companions[name])
 
         pygame.draw.rect(surface, (80, 140, 80), self.start_button, border_radius=10)
