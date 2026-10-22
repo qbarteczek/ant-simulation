@@ -374,3 +374,4 @@ AGENT_PROFILES = [
 # --- Księga mrowiska (wspólna wiedza agentek, ksiega_mrowiska.json) ---------
 BOOK_MAX_LESSONS = 25  # tyle lekcji trzyma plik; przy przepełnieniu wypada najsłabsza
 BOOK_SHOWN = 12  # tyle najważniejszych lekcji trafia do opisu sytuacji agentki
+AGENT_INSTINCT_ENERGY = 0.1  # zapas energii (część max) ponad to, co potrzeba na powrót do gniazda

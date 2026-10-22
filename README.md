@@ -50,6 +50,13 @@ każda następna kolonia zaczyna z wiedzą poprzednich. Przy pełnej Księdze
 (25 lekcji) wypada najsłabsza. Następczyni zabitej agentki dziedziczy też jej
 notatki o bieżącej mapie. Usunięcie pliku zaczyna naukę od zera.
 
+### Trening
+
+`python trening.py` rozgrywa bez okna serię gier w różnych biomach i porach
+roku (domyślnie 6 gier po 4 minuty, ok. 0,5 USD), a na koniec Claude porządkuje
+Księgę: scala powtarzające się lekcje i sumuje ich wagi. `--gier`, `--minut`,
+`--predkosc` zmieniają długość treningu, `--tylko-porzadkuj` tylko porządkuje Księgę.
+
 ## Sterowanie
 
 | Klawisz / mysz | Akcja |

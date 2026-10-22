@@ -177,6 +177,9 @@ class AgentAnt:
 
         self.pos = Vector2(pozycja) + Vector2(random.uniform(-10, 10), random.uniform(-10, 10))
         self.angle = random.uniform(0, 2 * math.pi)
+        self.strona_obejscia = random.choice((-1, 1))
+        self.punkt_postoju = Vector2(self.pos)
+        self.czas_postoju = 0.0
         self.max_energy = C.ANT_ENERGY_MAX * 1.5
         self.energy = self.max_energy
         self.niesie = 0.0
@@ -218,19 +221,48 @@ class AgentAnt:
             self.angle += roznica * min(1.0, 8.0 * dt)
         self._krok(dt, world, predkosc_mult)
 
+    @staticmethod
+    def _wolne(world, p):
+        if not (8 <= p.x <= C.WIDTH - 8 and 8 <= p.y <= C.HEIGHT - 8):
+            return False
+        return all(p.distance_to(obs.pos) >= obs.radius + 5 for obs in world.obstacles)
+
     def _krok(self, dt, world, predkosc_mult=1.0):
         v = C.ANT_BASE_SPEED * self.szybkosc * world.mods["activity"] * predkosc_mult
-        nast = self.pos + Vector2(math.cos(self.angle), math.sin(self.angle)) * v * dt
-        for obs in world.obstacles:
-            od = nast - obs.pos
-            if od.length() < obs.radius + 5:
-                # obejście przeszkody: skręt wzdłuż jej brzegu
-                styczna = math.atan2(od.y, od.x) + math.pi / 2
-                self.angle = styczna
-                nast = self.pos + Vector2(math.cos(styczna), math.sin(styczna)) * v * dt
+        krok = v * dt
+        # Obejście przeszkód: próbujemy kolejnych kierunków coraz dalej od
+        # zamierzonego, najpierw po stronie wybranej przy poprzednim obejściu
+        # (bez tego mrówka między dwiema przeszkodami odbijała się w miejscu).
+        wybrany = None
+        for odchylenie in (0, 25, 50, 75, 100, 125, 150, 180):
+            for znak in ((self.strona_obejscia, -self.strona_obejscia) if odchylenie else (1,)):
+                kat = self.angle + math.radians(odchylenie) * znak
+                nast = self.pos + Vector2(math.cos(kat), math.sin(kat)) * krok
+                if self._wolne(world, nast):
+                    wybrany = (kat, nast, znak)
+                    break
+            if wybrany:
                 break
+        if wybrany is None:  # zaklinowana - wypychamy od najbliższej przeszkody
+            kat = random.uniform(0, 2 * math.pi)
+            nast = self.pos + Vector2(math.cos(kat), math.sin(kat)) * krok
+            wybrany = (kat, nast, self.strona_obejscia)
+        kat, nast, znak = wybrany
+        if kat != self.angle:
+            self.strona_obejscia = znak
+        self.angle = kat
         nast.x = min(max(nast.x, 8), C.WIDTH - 8)
         nast.y = min(max(nast.y, 8), C.HEIGHT - 8)
+
+        # straż przed utknięciem: gdy przez 3 s prawie nie ruszyła się z miejsca,
+        # zmienia stronę obejścia i skręca losowo
+        self.czas_postoju += dt
+        if self.czas_postoju > 3.0:
+            if self.pos.distance_to(self.punkt_postoju) < krok / dt * 0.5:
+                self.strona_obejscia = -self.strona_obejscia
+                self.angle += random.uniform(-math.pi, math.pi)
+            self.punkt_postoju = Vector2(self.pos)
+            self.czas_postoju = 0.0
         self.pos = nast
         if self.feromon:
             world.pher.deposit("food", self.pos.x, self.pos.y, C.AGENT_PHEROMONE)
@@ -312,6 +344,17 @@ class AgentAnt:
 
         if self.akcja_skonczona:
             self.autopilot()
+
+        # instynkt: skrajnie głodna mrówka zawsze wraca się najeść, cokolwiek
+        # postanowiła (decyzje Claude przychodzą co kilka sekund - za rzadko,
+        # żeby w porę zauważyć, że energia się kończy)
+        aktywnosc = max(world.mods["activity"], 0.05)
+        czas_powrotu = self.pos.distance_to(world.nest.pos) / (C.ANT_BASE_SPEED * self.szybkosc * aktywnosc)
+        na_powrot = C.ANT_ENERGY_DRAIN * 0.8 * aktywnosc * czas_powrotu * 1.5
+        if (self.energy < na_powrot + self.max_energy * C.AGENT_INSTINCT_ENERGY
+                and self.akcja not in ("wracaj_do_gniazda", "odpoczywaj", "uciekaj")):
+            self.ustaw_akcje("wracaj_do_gniazda", feromon=self.niesie > 0)
+            self.zdarzenie(dzien, "Instynkt głodu zawrócił cię do gniazda.")
 
         getattr(self, "_akcja_" + self.akcja)(dt, world, dzien)
         self._walka_i_niebezpieczenstwo(dt, world, dzien)
@@ -476,6 +519,65 @@ class KsiegaMrowiska:
         except OSError:
             pass  # np. przeglądarka - Księga działa wtedy tylko w tej grze
 
+    def uporzadkuj(self, klient, model=None):
+        """Jedno zapytanie do Claude: scala powtarzające się lekcje, wagi sumuje.
+        Zwraca (przed, po) albo None, gdy nie było czego porządkować."""
+        if len(self.lekcje) < 4:
+            return None
+        lista = "\n".join(
+            f"- [waga {l.get('waga', 1)}; {l.get('autor', '?')}; {l.get('kolonia', '?')}] {l['tekst']}"
+            for l in self.posortowane()
+        )
+        narzedzie = {
+            "name": "zapisz_ksiege",
+            "description": "Zapisz uporządkowaną Księgę mrowiska.",
+            "strict": True,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "lekcje": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tekst": {"type": "string"},
+                                "waga": {"type": "integer"},
+                                "autor": {"type": "string"},
+                                "kolonia": {"type": "string"},
+                            },
+                            "required": ["tekst", "waga", "autor", "kolonia"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["lekcje"],
+                "additionalProperties": False,
+            },
+        }
+        odp = klient.messages.create(
+            model=model or C.AGENT_MODEL,
+            max_tokens=8000,
+            output_config={"effort": "medium"},
+            tools=[narzedzie],
+            tool_choice={"type": "tool", "name": "zapisz_ksiege"},
+            messages=[{"role": "user", "content": (
+                "To Księga mrowiska - lekcje, które mrówki z symulacji zapisały dla kolejnych pokoleń. "
+                "Uporządkuj ją: lekcje mówiące o tym samym scal w jedną, jasną i konkretną (jedno zdanie, "
+                "po polsku, bez współrzędnych), a ich wagi zsumuj. Lekcje sprzeczne zostaw obie. Nie wymyślaj "
+                "nowych lekcji. Autor: imię autorki najważniejszej ze scalonych; kolonia: biomy i pory roku, "
+                f"z których pochodzą. Zostaw najwyżej {C.BOOK_MAX_LESSONS} lekcji.\n\n" + lista
+            )}],
+        )
+        wynik = next((b.input for b in odp.content if b.type == "tool_use"), None)
+        nowe = [l for l in (wynik or {}).get("lekcje", []) if isinstance(l, dict) and l.get("tekst")]
+        if not nowe:
+            return None
+        przed = len(self.lekcje)
+        self.lekcje = [dict(tekst=l["tekst"][:200], autor=l.get("autor", "?"), kolonia=l.get("kolonia", "?"),
+                            waga=max(1, int(l.get("waga", 1)))) for l in nowe[: C.BOOK_MAX_LESSONS]]
+        self._zapisz()
+        return przed, len(self.lekcje)
+
     def posortowane(self):
         return sorted(self.lekcje, key=lambda l: -l.get("waga", 1))
 
@@ -527,6 +629,8 @@ class ZarzadAgentow:
         self.kolonia = f"{world.cfg['biome']}, {world.cfg['season']}"
         self.spuscizna = {}  # imię -> notatki zmarłej agentki dla następczyni
         self.potwierdzenia = set()  # (imię, tekst lekcji) - jedno potwierdzenie na agentkę
+        self.nowe_lekcje = 0
+        self.przyczyny_zgonow = {}  # przyczyna -> liczba (statystyka treningu)
 
         self.zapytania = 0
         self.tokeny_we = 0
@@ -581,6 +685,7 @@ class ZarzadAgentow:
                     inny.okazja = f"{a.imie} ({a.rola}) zginęła: {a.przyczyna}. Ostatnio robiła: {a.akcja}."
                     inny.potrzebna_decyzja = True
             self.spuscizna[a.imie] = list(a.notatki)
+            self.przyczyny_zgonow[a.przyczyna] = self.przyczyny_zgonow.get(a.przyczyna, 0) + 1
             profil = next(p for p in self.profile if p["imie"] == a.imie)
             self.do_odrodzenia.append((world.time + C.AGENT_RESPAWN_TIME, profil))
         self.agenci = [a for a in self.agenci if a.alive]
@@ -660,6 +765,7 @@ class ZarzadAgentow:
         if lekcja:
             dodana = self.ksiega.dodaj(lekcja, a.imie, self.kolonia)
             if dodana:
+                self.nowe_lekcje += 1
                 self.loguj((255, 230, 150), f"[Księga] {a.imie} zapisuje: {dodana}")
         numer = decyzja.get("potwierdz_lekcje")
         lista = self.ksiega.posortowane()[: C.BOOK_SHOWN]
